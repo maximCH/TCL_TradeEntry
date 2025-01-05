@@ -1,4 +1,5 @@
 import time
+import signal
 from binance.client import Client
 from binance.enums import *
 from config import API_KEY, API_SECRET  # Import API keys from config.py
@@ -101,6 +102,21 @@ def place_stop_loss(symbol, side, stop_price, quantity):
         print(f"Error placing stop-loss order: {e}")
         raise RuntimeError("Failed to place stop-loss order")
 
+def signal_handler(signal, frame):
+    """
+    Handles script interruption and cancels all open orders before exiting.
+    """
+    print("\nScript interrupted. Cancelling all open orders...")
+    try:
+        open_orders = client.futures_get_open_orders()
+        for order in open_orders:
+            client.futures_cancel_order(symbol=order['symbol'], orderId=order['orderId'])
+            print(f"Canceled order: {order['orderId']}")
+    except Exception as e:
+        print(f"Error during cancellation: {e}")
+    print("All open orders canceled. Exiting.")
+    exit(0)
+
 def trading_strategy(symbol, position_type, entry_price, entry_volume, take_profit_price, dip_buy_1_limit, dip_buy_1_volume, dip_buy_1_target, dip_buy_2_limit, dip_buy_2_volume, dip_buy_2_target, stop_loss_price):
     """
     Executes the trading strategy based on user inputs.
@@ -138,23 +154,31 @@ def trading_strategy(symbol, position_type, entry_price, entry_volume, take_prof
             cancel_open_orders(symbol)
             break
 
-        # Check if dip buy 1 is executed
-        if dip_buy_1_order and dip_buy_1_order['orderId'] not in open_order_ids:
-            print("Dip buy 1 executed. Adjusting take profit and placing dip buy 2.")
-            cancel_open_orders(symbol)
-            total_volume = QUN_Precision(entry_volume + dip_buy_1_volume, symbol)
-            tp_order = place_limit_order(symbol, side_exit, dip_buy_1_target, total_volume)
-            dip_buy_2_order = place_limit_order(symbol, side_entry, dip_buy_2_limit, dip_buy_2_volume)
-            dip_buy_1_order = None  # Remove reference to dip buy 1
+        # Explicitly check dip buy 1 execution
+        if dip_buy_1_order:
+            dip_buy_1_status = client.futures_get_order(symbol=symbol, orderId=dip_buy_1_order['orderId'])
+            if dip_buy_1_status['status'] == 'FILLED':
+                print("Dip buy 1 executed. Adjusting take profit and placing dip buy 2.")
+                cancel_open_orders(symbol)
+                total_volume = QUN_Precision(entry_volume + dip_buy_1_volume, symbol)
+                tp_order = place_limit_order(symbol, side_exit, dip_buy_1_target, total_volume)
+                try:
+                    dip_buy_2_order = place_limit_order(symbol, side_entry, dip_buy_2_limit, dip_buy_2_volume)
+                except Exception as e:
+                    print(f"Failed to place dip buy 2 order: {e}")
+                    dip_buy_2_order = None
+                dip_buy_1_order = None
 
-        # Check if dip buy 2 is executed
-        if dip_buy_2_order and dip_buy_2_order['orderId'] not in open_order_ids:
-            print("Dip buy 2 executed. Adjusting take profit and placing stop-loss.")
-            cancel_open_orders(symbol)
-            total_volume = QUN_Precision(entry_volume + dip_buy_1_volume + dip_buy_2_volume, symbol)
-            tp_order = place_limit_order(symbol, side_exit, dip_buy_2_target, total_volume)
-            sl_order = place_stop_loss(symbol, side_exit, stop_loss_price, total_volume)
-            dip_buy_2_order = None  # Remove reference to dip buy 2
+        # Explicitly check dip buy 2 execution
+        if dip_buy_2_order:
+            dip_buy_2_status = client.futures_get_order(symbol=symbol, orderId=dip_buy_2_order['orderId'])
+            if dip_buy_2_status['status'] == 'FILLED':
+                print("Dip buy 2 executed. Adjusting take profit and placing stop-loss.")
+                cancel_open_orders(symbol)
+                total_volume = QUN_Precision(entry_volume + dip_buy_1_volume + dip_buy_2_volume, symbol)
+                tp_order = place_limit_order(symbol, side_exit, dip_buy_2_target, total_volume)
+                sl_order = place_stop_loss(symbol, side_exit, stop_loss_price, total_volume)
+                dip_buy_2_order = None
 
         time.sleep(2)
 
@@ -224,4 +248,5 @@ def main():
         print(f"An error occurred: {e}")
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGINT, signal_handler)  # Handle Ctrl+C
     main()
