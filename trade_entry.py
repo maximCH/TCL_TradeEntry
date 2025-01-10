@@ -68,16 +68,35 @@ def check_order_execution(order_id, symbol):
     :param symbol: Trading pair (e.g., BTCUSDT)
     :return: True if the order is filled, False otherwise
     """
-    try:
-        while True:
+    retries = 3
+    while retries > 0:
+        try:
+            order_status = client.futures_get_order(symbol=symbol, orderId=order_id)
+            if order_status['status'] == 'FILLED':
+                print(f"Order {order_id} filled.")
+                retries = 3  # Reset retries on success
+                return True
+            time.sleep(2)  # Wait before checking again
+        except Exception as e:
+            print(f"Error checking order status: {e}. Retrying...")
+            retries -= 1
+            time.sleep(2)  # Wait before retrying
+
+    raise RuntimeError(f"Failed to check order execution after 3 consecutive retries for order {order_id}")
+    retries = 3
+    while retries > 0:
+        try:
             order_status = client.futures_get_order(symbol=symbol, orderId=order_id)
             if order_status['status'] == 'FILLED':
                 print(f"Order {order_id} filled.")
                 return True
             time.sleep(2)  # Wait before checking again
-    except Exception as e:
-        print(f"Error checking order status: {e}")
-        raise RuntimeError("Failed to check order execution")
+        except Exception as e:
+            print(f"Error checking order status: {e}. Retrying...")
+            retries -= 1
+            time.sleep(2)  # Wait before retrying
+
+    raise RuntimeError(f"Failed to check order execution after 3 retries for order {order_id}")
 
 def place_stop_loss(symbol, side, stop_price, quantity):
     """
